@@ -3,55 +3,102 @@
 import { useWallet } from '@solana/wallet-adapter-react'
 import { WalletMultiButton } from '@solana/wallet-adapter-react-ui'
 import { useEffect, useState } from 'react'
-import { supabase } from '@/lib/supabase'
+import { supabase } from '../lib/supabase'
 
 type State = 'DISCONNECTED' | 'CONNECTED' | 'RECORDED_TODAY'
 
 export default function Home() {
   const { publicKey, connected } = useWallet()
   const [state, setState] = useState<State>('DISCONNECTED')
-  const [count] = useState(2)
+  const [count] = useState(2) // 先占位，后面再算真实次数
 
-  // 今天的日期（YYYY-MM-DD）
-  const today = new Date().toISOString().slice(0, 10)
-
-  // 连接状态变化
-  useEffect(() => {
-    if (connected) setState('CONNECTED')
-    else setState('DISCONNECTED')
-  }, [connected])
-
-  // 查询今天是否已打卡
-  useEffect(() => {
+  /**
+   * 检查「今天 UTC 是否已打卡」
+   */
+  const checkToday = async () => {
     if (!publicKey) return
 
-    const checkToday = async () => {
-      const { data } = await supabase
-        .from('daka_logs')
-        .select('id')
-        .eq('wallet', publicKey.toBase58())
-        .eq('date', today)
-        .single()
+    const wallet = publicKey.toBase58()
 
-      if (data) {
-        setState('RECORDED_TODAY')
-      }
+    // 今天 UTC 00:00
+    const start = new Date()
+    start.setUTCHours(0, 0, 0, 0)
+
+    // 明天 UTC 00:00
+    const end = new Date(start)
+    end.setUTCDate(end.getUTCDate() + 1)
+
+    const { data, error } = await supabase
+      .from('daka_logs')
+      .select('id')
+      .eq('wallet', wallet)
+      .gte('created_at', start.toISOString())
+      .lt('created_at', end.toISOString())
+      .limit(1)
+
+    if (error) {
+      console.error('checkToday error:', error)
+      setState('CONNECTED')
+      return
     }
 
-    checkToday()
-  }, [publicKey, today])
+    if (data && data.length > 0) {
+      setState('RECORDED_TODAY')
+    } else {
+      setState('CONNECTED')
+    }
+  }
 
-  // 点击打卡
+  /**
+   * 点击 DAKA
+   */
   const handleDaka = async () => {
     if (!publicKey) return
 
-    await supabase.from('daka_logs').insert({
-      wallet: publicKey.toBase58(),
-      date: today,
+    const wallet = publicKey.toBase58()
+
+    // 再查一次，防止重复
+    const start = new Date()
+    start.setUTCHours(0, 0, 0, 0)
+
+    const end = new Date(start)
+    end.setUTCDate(end.getUTCDate() + 1)
+
+    const { data } = await supabase
+      .from('daka_logs')
+      .select('id')
+      .eq('wallet', wallet)
+      .gte('created_at', start.toISOString())
+      .lt('created_at', end.toISOString())
+      .limit(1)
+
+    if (data && data.length > 0) {
+      setState('RECORDED_TODAY')
+      return
+    }
+
+    const { error } = await supabase.from('daka_logs').insert({
+      wallet,
     })
+
+    if (error) {
+      console.error('insert error:', error)
+      return
+    }
 
     setState('RECORDED_TODAY')
   }
+
+  /**
+   * 钱包状态变化时
+   */
+  useEffect(() => {
+    if (connected) {
+      checkToday()
+    } else {
+      setState('DISCONNECTED')
+    }
+  }, [connected])
 
   return (
     <main className="h-screen bg-black flex flex-col items-center justify-center text-white">
@@ -59,10 +106,12 @@ export default function Home() {
         0 before the dot
       </h1>
 
+      {/* 未连接钱包 */}
       {state === 'DISCONNECTED' && (
         <WalletMultiButton className="!bg-purple-500 !rounded-full" />
       )}
 
+      {/* 可打卡 */}
       {state === 'CONNECTED' && (
         <button
           onClick={handleDaka}
@@ -72,6 +121,7 @@ export default function Home() {
         </button>
       )}
 
+      {/* 已打卡 */}
       {state === 'RECORDED_TODAY' && (
         <button
           disabled
@@ -81,12 +131,13 @@ export default function Home() {
         </button>
       )}
 
-      {connected && (
+      {/* 钱包信息 */}
+      {connected && publicKey && (
         <>
           <div className="mt-4 text-sm opacity-60">{count} / 10</div>
           <div className="mt-2 text-xs opacity-40">
-            {publicKey?.toBase58().slice(0, 4)}...
-            {publicKey?.toBase58().slice(-4)}
+            {publicKey.toBase58().slice(0, 4)}...
+            {publicKey.toBase58().slice(-4)}
           </div>
         </>
       )}
