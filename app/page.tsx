@@ -27,7 +27,7 @@ export default function Home() {
 
     const checkToday = async () => {
       const { data } = await supabase
-        .from('daka_records')
+        .from('daka_logs')
         .select('id')
         .eq('wallet', publicKey.toBase58())
         .eq('date', today)
@@ -45,7 +45,7 @@ export default function Home() {
   const handleDaka = async () => {
     if (!publicKey) return
 
-    await supabase.from('daka_records').insert({
+    await supabase.from('daka_logs').insert({
       wallet: publicKey.toBase58(),
       date: today,
     })
