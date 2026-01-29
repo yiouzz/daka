@@ -3,65 +3,54 @@
 import { useWallet } from '@solana/wallet-adapter-react'
 import { WalletMultiButton } from '@solana/wallet-adapter-react-ui'
 import { useEffect, useState } from 'react'
-import { supabase } from '../lib/supabase'
+import { supabase } from '@/lib/supabase'
 
 type State = 'DISCONNECTED' | 'CONNECTED' | 'RECORDED_TODAY'
 
 export default function Home() {
   const { publicKey, connected } = useWallet()
   const [state, setState] = useState<State>('DISCONNECTED')
-  const [count, setCount] = useState<number>(0)
+  const [count] = useState(2)
 
-  const wallet = publicKey?.toBase58() || ''
+  // 今天的日期（YYYY-MM-DD）
   const today = new Date().toISOString().slice(0, 10)
 
-  // ① 钱包连接 / 断开 → 状态切换 + 查询今日是否已打卡
+  // 连接状态变化
   useEffect(() => {
-    if (!connected || !wallet) {
-      setState('DISCONNECTED')
-      return
-    }
+    if (connected) setState('CONNECTED')
+    else setState('DISCONNECTED')
+  }, [connected])
+
+  // 查询今天是否已打卡
+  useEffect(() => {
+    if (!publicKey) return
 
     const checkToday = async () => {
-      // 查询今天是否已打卡
       const { data } = await supabase
-        .from('daka_logs')
+        .from('daka_records')
         .select('id')
-        .eq('wallet', wallet)
-        .eq('daka_date', today)
-        .maybeSingle()
+        .eq('wallet', publicKey.toBase58())
+        .eq('date', today)
+        .single()
 
       if (data) {
         setState('RECORDED_TODAY')
-      } else {
-        setState('CONNECTED')
       }
-
-      // 同时查询累计打卡次数
-      const { count } = await supabase
-        .from('daka_logs')
-        .select('*', { count: 'exact', head: true })
-        .eq('wallet', wallet)
-
-      setCount(count || 0)
     }
 
     checkToday()
-  }, [connected, wallet, today])
+  }, [publicKey, today])
 
-  // ② 点击 DAKA → 写入 Supabase
+  // 点击打卡
   const handleDaka = async () => {
-    if (!wallet) return
+    if (!publicKey) return
 
-    const { error } = await supabase.from('daka_logs').insert({
-      wallet,
-      daka_date: today,
+    await supabase.from('daka_records').insert({
+      wallet: publicKey.toBase58(),
+      date: today,
     })
 
-    if (!error) {
-      setState('RECORDED_TODAY')
-      setCount((c) => c + 1)
-    }
+    setState('RECORDED_TODAY')
   }
 
   return (
@@ -96,7 +85,8 @@ export default function Home() {
         <>
           <div className="mt-4 text-sm opacity-60">{count} / 10</div>
           <div className="mt-2 text-xs opacity-40">
-            {wallet.slice(0, 4)}...{wallet.slice(-4)}
+            {publicKey?.toBase58().slice(0, 4)}...
+            {publicKey?.toBase58().slice(-4)}
           </div>
         </>
       )}
