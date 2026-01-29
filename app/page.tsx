@@ -4,142 +4,130 @@ import { useWallet } from '@solana/wallet-adapter-react'
 import { WalletMultiButton } from '@solana/wallet-adapter-react-ui'
 import { useEffect, useState } from 'react'
 import { supabase } from '../lib/supabase'
+import { submitDaka } from './actions' 
+import { Toaster, toast } from 'sonner' 
 
-type State = 'DISCONNECTED' | 'CONNECTED' | 'RECORDED_TODAY'
+// 定义几种简单的状态
+type State = 'DISCONNECTED' | 'CONNECTED' | 'RECORDED_TODAY' | 'LOADING'
 
 export default function Home() {
   const { publicKey, connected } = useWallet()
   const [state, setState] = useState<State>('DISCONNECTED')
-  const [count] = useState(2) // 先占位，后面再算真实次数
 
-  /**
-   * 检查「今天 UTC 是否已打卡」
-   */
-  const checkToday = async () => {
+  // 检查状态（只负责看，不负责改）
+  const checkStatus = async () => {
     if (!publicKey) return
 
     const wallet = publicKey.toBase58()
+    
+    // 算出 UTC 时间字符串
+    const now = new Date()
+    const year = now.getUTCFullYear()
+    const month = String(now.getUTCMonth() + 1).padStart(2, '0')
+    const day = String(now.getUTCDate()).padStart(2, '0')
+    const todayUTC = `${year}-${month}-${day}`
 
-    // 今天 UTC 00:00
-    const start = new Date()
-    start.setUTCHours(0, 0, 0, 0)
-
-    // 明天 UTC 00:00
-    const end = new Date(start)
-    end.setUTCDate(end.getUTCDate() + 1)
-
-    const { data, error } = await supabase
-      .from('daka_logs')
-      .select('id')
-      .eq('wallet', wallet)
-      .gte('created_at', start.toISOString())
-      .lt('created_at', end.toISOString())
-      .limit(1)
-
-    if (error) {
-      console.error('checkToday error:', error)
-      setState('CONNECTED')
-      return
-    }
-
-    if (data && data.length > 0) {
-      setState('RECORDED_TODAY')
-    } else {
-      setState('CONNECTED')
-    }
-  }
-
-  /**
-   * 点击 DAKA
-   */
-  const handleDaka = async () => {
-    if (!publicKey) return
-
-    const wallet = publicKey.toBase58()
-
-    // 再查一次，防止重复
-    const start = new Date()
-    start.setUTCHours(0, 0, 0, 0)
-
-    const end = new Date(start)
-    end.setUTCDate(end.getUTCDate() + 1)
-
+    // 问问数据库：这个钱包今天有记录吗？
     const { data } = await supabase
       .from('daka_logs')
       .select('id')
       .eq('wallet', wallet)
-      .gte('created_at', start.toISOString())
-      .lt('created_at', end.toISOString())
-      .limit(1)
+      .eq('daka_date', todayUTC)
+      .maybeSingle()
 
-    if (data && data.length > 0) {
+    if (data) {
       setState('RECORDED_TODAY')
-      return
+    } else {
+      setState('CONNECTED')
     }
-
-    const { error } = await supabase.from('daka_logs').insert({
-      wallet,
-    })
-
-    if (error) {
-      console.error('insert error:', error)
-      return
-    }
-
-    setState('RECORDED_TODAY')
   }
 
-  /**
-   * 钱包状态变化时
-   */
+  // 点击 DAKA 按钮触发
+  const handleDaka = async () => {
+    if (!publicKey) return
+    
+    // 1. 界面变更为加载中
+    setState('LOADING')
+
+    // 2. 呼叫后端裁判 (调用 actions.ts)
+    const result = await submitDaka(publicKey.toBase58())
+
+    // 3. 根据裁判结果更新界面
+    if (result.success) {
+      setState('RECORDED_TODAY')
+      toast.success("0 before the dot.") // 成功弹窗
+    } else {
+      if (result.msg === 'Already daka today') {
+        setState('RECORDED_TODAY')
+        toast('Already recorded today.')
+      } else {
+        // 其他错误（比如没钱，或者系统错误）
+        setState('CONNECTED')
+        toast.error(result.msg)
+      }
+    }
+  }
+
+  // 当钱包连接状态改变时，自动检查
   useEffect(() => {
-    if (connected) {
-      checkToday()
+    if (connected && publicKey) {
+      checkStatus()
     } else {
       setState('DISCONNECTED')
     }
-  }, [connected])
+  }, [connected, publicKey])
 
   return (
-    <main className="h-screen bg-black flex flex-col items-center justify-center text-white">
-      <h1 className="mb-16 text-xl tracking-widest opacity-80">
+    <main className="h-screen bg-black flex flex-col items-center justify-center text-white relative">
+      {/* 弹窗组件放在这里 */}
+      <Toaster theme="dark" position="bottom-center" />
+
+      <h1 className="mb-16 text-xl tracking-widest opacity-80 font-mono">
         0 before the dot
       </h1>
 
-      {/* 未连接钱包 */}
+      {/* 状态 1: 未连接 */}
       {state === 'DISCONNECTED' && (
-        <WalletMultiButton className="!bg-purple-500 !rounded-full" />
+        <WalletMultiButton className="!bg-purple-900/50 !rounded-full !border !border-purple-500/30 hover:!bg-purple-800 transition-all" />
       )}
 
-      {/* 可打卡 */}
+      {/* 状态 2: 已连接，可打卡 */}
       {state === 'CONNECTED' && (
         <button
           onClick={handleDaka}
-          className="px-10 py-4 rounded-full bg-yellow-600 hover:shadow-lg transition"
+          className="group relative px-12 py-4 rounded-full bg-transparent border border-[#d2b48c] text-[#d2b48c] hover:bg-[#d2b48c] hover:text-black transition-all duration-300 shadow-[0_0_15px_rgba(210,180,140,0.3)] hover:shadow-[0_0_25px_rgba(210,180,140,0.6)]"
         >
-          DAKA
+          <span className="tracking-widest font-bold">DAKA</span>
         </button>
       )}
 
-      {/* 已打卡 */}
+      {/* 状态 3: 处理中 */}
+      {state === 'LOADING' && (
+         <button disabled className="px-12 py-4 rounded-full bg-gray-800 text-gray-400 border border-gray-700 cursor-wait">
+           Processing...
+         </button>
+      )}
+
+      {/* 状态 4: 今日已完成 */}
       {state === 'RECORDED_TODAY' && (
-        <button
-          disabled
-          className="px-10 py-4 rounded-full bg-gray-600 cursor-not-allowed"
-        >
-          Recorded
-        </button>
+        <div className="flex flex-col items-center gap-4">
+            <button
+            disabled
+            className="px-12 py-4 rounded-full bg-gray-900 text-gray-500 border border-gray-800 cursor-not-allowed"
+            >
+            Recorded
+            </button>
+            <p className="text-xs text-gray-600 font-mono">See you tomorrow UTC 0</p>
+        </div>
       )}
 
-      {/* 钱包信息 */}
+      {/* 底部钱包地址展示 */}
       {connected && publicKey && (
-        <>
-          <div className="mt-4 text-sm opacity-60">{count} / 10</div>
-          <div className="mt-2 text-xs opacity-40">
-            {publicKey.toBase58().slice(0, 4)}...
-            {publicKey.toBase58().slice(-4)}
+        <div className="absolute bottom-10 flex flex-col items-center gap-2">
+          <div className="text-xs opacity-30 font-mono">
+             {publicKey.toBase58().slice(0, 4)}...{publicKey.toBase58().slice(-4)}
           </div>
-        </>
+        </div>
       )}
     </main>
   )
