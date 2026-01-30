@@ -2,12 +2,12 @@
   "name": "dakk",
   "symbol": "DAKK",
   "description": "Dakk it up! 0 before the dot.",
-  "image": "https://daka.lol/logo.png",
+  "image": "https://relaxed-profiterole-a93882.netlify.app/logo.png",
   "attributes": [],
   "properties": {
     "files": [
       {
-        "uri": "https://daka.lol/logo.png",
+        "uri": "https://relaxed-profiterole-a93882.netlify.app/logo.png",
         "type": "image/png"
       }
     ]
