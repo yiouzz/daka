@@ -1,0 +1,15 @@
+{
+  "name": "dakk",
+  "symbol": "DAKK",
+  "description": "Dakk it up! 0 before the dot.",
+  "image": "https://daka.lol/logo.png",
+  "attributes": [],
+  "properties": {
+    "files": [
+      {
+        "uri": "https://daka.lol/logo.png",
+        "type": "image/png"
+      }
+    ]
+  }
+}
