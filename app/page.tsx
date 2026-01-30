@@ -14,7 +14,11 @@ type State = 'CHECKING' | 'DISCONNECTED' | 'CONNECTED' | 'RECORDED_TODAY' | 'LOA
 export default function Home() {
   const { publicKey, connected } = useWallet()
   const [state, setState] = useState<State>('CHECKING')
+  
+  // 两个状态变量：当前数 和 目标数
   const [globalCount, setGlobalCount] = useState(0)
+  const [targetCount, setTargetCount] = useState('10') 
+
   const [showRules, setShowRules] = useState(false)
   const [isMounted, setIsMounted] = useState(false)
 
@@ -23,8 +27,10 @@ export default function Home() {
   }, [])
 
   const refreshStats = async () => {
-    const { count } = await getGlobalStats()
+    // 从后端同时获取 count 和 target
+    const { count, target } = await getGlobalStats()
     setGlobalCount(count || 0)
+    if (target) setTargetCount(target)
   }
 
   const checkUserStatus = async () => {
@@ -94,21 +100,17 @@ export default function Home() {
 
   return (
     <main 
-      // 修改点1：h-[100dvh] 完美适配手机高度，touch-action-none 防止手机上下拖动回弹
       className="h-[100dvh] w-full bg-black flex flex-col items-center justify-between py-10 relative overflow-hidden selection:bg-[#834e00] selection:text-white touch-none"
       style={{ fontFamily: "'Andale Mono', monospace", color: '#d6cbc2' }}
     >
       <Toaster theme="dark" position="bottom-center" toastOptions={{ style: { background: '#222', color: '#d6cbc2', border: '1px solid #444' } }} />
 
-      {/* 左上角 Logo */}
       <div className="absolute top-6 left-6 md:top-8 md:left-8 text-[10px] md:text-xs tracking-[0.2em] opacity-80 z-20">
         DAKK | 0 before the dot
       </div>
 
-      {/* 核心内容包裹层 - 加上 flex-1 让他占据中间主要位置 */}
       <div className="flex-1 flex flex-col items-center justify-center w-full transform scale-90 md:scale-100 transition-transform duration-300">
         
-        {/* 主标题 - 修改点2：whitespace-nowrap 不换行，响应式字体大小 */}
         <h1 className="mb-16 md:mb-24 text-2xl md:text-5xl tracking-[0.1em] text-[#d6cbc2] whitespace-nowrap">
           0 before the dot
         </h1>
@@ -121,14 +123,13 @@ export default function Home() {
 
           {state === 'DISCONNECTED' && (
             <div className="flex flex-col items-center gap-4">
-                {/* 手机上按钮容器稍微缩小一点点，防止太宽 */}
                 <div className="custom-wallet-btn-wrapper transition-transform hover:scale-105 active:scale-95 duration-200">
                   <WalletMultiButton style={{ 
                       backgroundColor: '#3c315b', 
                       border: '2px solid #ab9ff2',
                       borderRadius: '50px', 
                       height: '64px',
-                      padding: '0 40px', // 手机上padding稍微改小
+                      padding: '0 40px',
                       fontSize: '18px',
                       fontFamily: "'Andale Mono', monospace",
                       color: '#d6cbc2',
@@ -156,8 +157,9 @@ export default function Home() {
                 >
                   DAKA
                 </button>
+                {/* 动态显示：当前 / 目标 */}
                 <div className="text-xs tracking-widest opacity-60">
-                   {globalCount} / ∞
+                   {globalCount} / {targetCount}
                 </div>
             </div>
           )}
@@ -182,15 +184,15 @@ export default function Home() {
                   Recorded
                 </button>
                 
+                {/* 动态显示：当前 / 目标 */}
                 <div className="text-xs tracking-widest opacity-60">
-                  {globalCount} / ∞
+                  {globalCount} / {targetCount}
                 </div>
             </div>
           )}
         </div>
       </div>
 
-      {/* 底部信息区 - 修改点4：字体放大到 text-xs (12px)，手机上不再切断 */}
       <div className="flex flex-col items-center gap-4 z-20 pb-4 md:pb-0">
           
           {connected && publicKey && (
@@ -214,7 +216,6 @@ export default function Home() {
           </div>
       </div>
 
-      {/* 规则弹窗 */}
       {showRules && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/90 backdrop-blur-sm px-4" onClick={() => setShowRules(false)}>
             <div 
@@ -235,7 +236,7 @@ export default function Home() {
                     </li>
                     <li className="flex gap-4">
                         <span className="text-[#f39800] shrink-0">03.</span>
-                        <span>Min 0.01 SOL required to prevent spam.</span>
+                        <span>Min 0.01 SOL + Active History required.</span>
                     </li>
                 </ul>
             </div>
