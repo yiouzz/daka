@@ -11,97 +11,133 @@ const supabase = createClient(
 const SOLANA_RPC = 'https://api.mainnet-beta.solana.com'
 
 function getTodayUTC() {
-  const now = new Date()
-  const year = now.getUTCFullYear()
-  const month = String(now.getUTCMonth() + 1).padStart(2, '0')
-  const day = String(now.getUTCDate()).padStart(2, '0')
-  return `${year}-${month}-${day}`
+  return new Date().toISOString().split('T')[0];
 }
 
 /**
- * 获取今日数据 + 目标设定
- */
-export async function getGlobalStats() {
-  try {
-    const todayUTC = getTodayUTC()
-    
-    // 1. 获取今日打卡数
-    const { count, error } = await supabase
-      .from('daka_logs')
-      .select('*', { count: 'exact', head: true })
-      .eq('daka_date', todayUTC)
-
-    if (error) throw error
-
-    // 2. 获取数据库里设定的“目标数”
-    const { data: settings } = await supabase
-      .from('app_settings')
-      .select('value')
-      .eq('key', 'target_count')
-      .single()
-
-    const target = settings?.value || '10'
-    
-    return { success: true, count: count || 0, target }
-  } catch (err) {
-    console.error('Stats Error:', err)
-    return { success: false, count: 0, target: '10' }
-  }
-}
-
-/**
- * 提交打卡
+ * 核心逻辑：提交打卡
  */
 export async function submitDaka(walletAddress: string) {
   try {
-    let pubKey: PublicKey
-    try {
-      pubKey = new PublicKey(walletAddress)
-    } catch (e) {
-      return { success: false, msg: 'Invalid wallet address' }
-    }
-
+    const pubKey = new PublicKey(walletAddress)
     const connection = new Connection(SOLANA_RPC)
+    const todayUTC = getTodayUTC()
+
+    // 1. 从数据库读取所有门槛配置 (一次性拿完)
+    const { data: settingsData } = await supabase.from('app_settings').select('key, value');
     
-    // 【修复点】：并行查询余额和交易历史
-    // getSignaturesForAddress: 查询该地址的历史交易签名，limit: 1 表示只要查到1条就算有历史
+    // 把设置转成一个好用的对象，并设置默认值防止出错
+    const config = {
+        min_age: 30,
+        min_sol: 0.01,
+        min_tx: 2
+    };
+
+    settingsData?.forEach(item => {
+        if (item.key === 'min_wallet_age_days') config.min_age = parseInt(item.value);
+        if (item.key === 'min_sol_balance') config.min_sol = parseFloat(item.value);
+        if (item.key === 'min_tx_count') config.min_tx = parseInt(item.value);
+    });
+
+    // 2. 调用 Solana 链上数据
     const [balance, signatures] = await Promise.all([
       connection.getBalance(pubKey),
-      connection.getSignaturesForAddress(pubKey, { limit: 1 })
-    ])
-    
-    // 【规则 3.1】余额检查
-    if (balance < 0.01 * LAMPORTS_PER_SOL) {
-      return { success: false, msg: 'SOL balance too low (< 0.01)' }
+      connection.getSignaturesForAddress(pubKey, { limit: 100 }) 
+    ]);
+
+    // 【规则 A】余额检查
+    if (balance < config.min_sol * LAMPORTS_PER_SOL) {
+      return { success: false, msg: `SOL balance < ${config.min_sol}` };
     }
 
-    // 【规则 3.2】活跃度检查 (修复版)
-    // 如果签名数组长度为 0，说明没有任何交易历史
-    if (signatures.length === 0) {
-      return { success: false, msg: 'Wallet no history detected' }
+    // 【规则 B】历史活跃度检查
+    if (signatures.length < config.min_tx) {
+      return { success: false, msg: 'Wallet not active enough' };
     }
 
-    // 【规则 1 & 2】唯一性检查
-    const todayUTC = getTodayUTC()
-    const { error } = await supabase
+    // 【规则 C】钱包年龄检查
+    const oldestSig = signatures[signatures.length - 1];
+    if (oldestSig && oldestSig.blockTime) {
+        const oldestDate = oldestSig.blockTime * 1000;
+        const minAgeMs = config.min_age * 24 * 60 * 60 * 1000;
+        const deadline = Date.now() - minAgeMs;
+        
+        if (oldestDate > deadline) {
+            return { success: false, msg: `Wallet must be > ${config.min_age} days old` };
+        }
+    }
+
+    // 3. 校验通过，写入记录
+    const { error: insertError } = await supabase
       .from('daka_logs')
-      .insert({
-        wallet: walletAddress,
-        daka_date: todayUTC
-      })
+      .insert({ wallet: walletAddress, daka_date: todayUTC });
 
-    if (error) {
-      if (error.code === '23505') {
-        return { success: false, msg: 'Already daka today' }
-      }
-      console.error('Supabase error:', error)
-      return { success: false, msg: 'System busy, try again' }
+    if (insertError) {
+      if (insertError.code === '23505') return { success: false, msg: 'Already daka today' };
+      return { success: false, msg: 'Database Error' };
     }
 
-    return { success: true, msg: 'Recorded' }
+    // 4. 更新连续签到统计 (这一步是静默的，不阻塞用户)
+    await updateSignStats(walletAddress, todayUTC);
+
+    return { success: true, msg: 'Recorded' };
 
   } catch (err) {
-    console.error('Daka Action Error:', err)
-    return { success: false, msg: 'Internal Error' }
+    console.error(err);
+    return { success: false, msg: 'Internal Error' };
   }
+}
+
+/**
+ * 辅助：更新统计数据
+ */
+async function updateSignStats(wallet: string, today: string) {
+    try {
+        const { data } = await supabase.from('user_stats').select('*').eq('wallet', wallet).single();
+        
+        if (!data) {
+            await supabase.from('user_stats').insert({
+                wallet,
+                last_daka_date: today,
+                consecutive_days: 1,
+                total_daka_count: 1
+            });
+        } else {
+            const yesterday = new Date();
+            yesterday.setUTCDate(yesterday.getUTCDate() - 1);
+            const yesterdayStr = yesterday.toISOString().split('T')[0];
+
+            let newConsecutive = 1;
+            if (data.last_daka_date === yesterdayStr) {
+                newConsecutive = data.consecutive_days + 1;
+            } else if (data.last_daka_date === today) {
+                newConsecutive = data.consecutive_days; // 防止重复计算
+            }
+
+            await supabase.from('user_stats').update({
+                last_daka_date: today,
+                consecutive_days: newConsecutive,
+                total_daka_count: data.total_daka_count + 1,
+                is_qualified: newConsecutive >= 10 ? true : data.is_qualified
+            }).eq('wallet', wallet);
+        }
+    } catch (e) {
+        console.error("Update stats error", e);
+    }
+}
+
+/**
+ * 获取全局展示数据
+ */
+export async function getGlobalStats() {
+    try {
+        const { count } = await supabase.from('daka_logs').select('*', { count: 'exact', head: true }).eq('daka_date', getTodayUTC());
+        const { data: settings } = await supabase.from('app_settings').select('key, value');
+        
+        const target = settings?.find(s => s.key === 'target_count')?.value || '10';
+        
+        return { success: true, count: count || 0, target };
+    } catch (err) {
+        return { success: false, count: 0, target: '10' };
+    }
 }
