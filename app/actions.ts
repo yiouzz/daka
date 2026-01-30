@@ -8,7 +8,6 @@ const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
 )
 
-// 注意：如果未来用户量大，建议换成 Helius 或 Alchemy 的付费 RPC 节点
 const SOLANA_RPC = 'https://api.mainnet-beta.solana.com'
 
 function getTodayUTC() {
@@ -41,7 +40,6 @@ export async function getGlobalStats() {
       .eq('key', 'target_count')
       .single()
 
-    // 如果数据库没读到，默认回退到 10
     const target = settings?.value || '10'
     
     return { success: true, count: count || 0, target }
@@ -65,10 +63,11 @@ export async function submitDaka(walletAddress: string) {
 
     const connection = new Connection(SOLANA_RPC)
     
-    // 并行查询余额和交易次数，加快速度
-    const [balance, transactionCount] = await Promise.all([
+    // 【修复点】：并行查询余额和交易历史
+    // getSignaturesForAddress: 查询该地址的历史交易签名，limit: 1 表示只要查到1条就算有历史
+    const [balance, signatures] = await Promise.all([
       connection.getBalance(pubKey),
-      connection.getTransactionCount(pubKey)
+      connection.getSignaturesForAddress(pubKey, { limit: 1 })
     ])
     
     // 【规则 3.1】余额检查
@@ -76,9 +75,9 @@ export async function submitDaka(walletAddress: string) {
       return { success: false, msg: 'SOL balance too low (< 0.01)' }
     }
 
-    // 【规则 3.2】活跃度检查 (新增)
-    // 交易次数为 0 说明是纯新生成的空投猎手号
-    if (transactionCount === 0) {
+    // 【规则 3.2】活跃度检查 (修复版)
+    // 如果签名数组长度为 0，说明没有任何交易历史
+    if (signatures.length === 0) {
       return { success: false, msg: 'Wallet no history detected' }
     }
 
