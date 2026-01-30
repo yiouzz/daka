@@ -7,27 +7,37 @@ import { supabase } from '../lib/supabase'
 import { submitDaka, getGlobalStats } from './actions' 
 import { Toaster, toast } from 'sonner' 
 
-type State = 'DISCONNECTED' | 'CONNECTED' | 'RECORDED_TODAY' | 'LOADING'
+// 引入一些必要的 CSS 样式覆盖（为了让钱包按钮变紫色）
+import '@solana/wallet-adapter-react-ui/styles.css'
+
+type State = 'CHECKING' | 'DISCONNECTED' | 'CONNECTED' | 'RECORDED_TODAY' | 'LOADING'
 
 export default function Home() {
-  const { publicKey, connected } = useWallet()
-  const [state, setState] = useState<State>('DISCONNECTED')
-  
-  // 新增：全局计数 & 规则弹窗开关
+  const { publicKey, connected, wallet } = useWallet()
+  const [state, setState] = useState<State>('CHECKING') // 初始状态改为 CHECKING
   const [globalCount, setGlobalCount] = useState(0)
   const [showRules, setShowRules] = useState(false)
+  const [isMounted, setIsMounted] = useState(false)
 
-  // 获取最新数据
+  // 1. 解决"闪烁"问题：确保组件加载完成后再渲染
+  useEffect(() => {
+    setIsMounted(true)
+  }, [])
+
+  // 获取全局计数
   const refreshStats = async () => {
     const { count } = await getGlobalStats()
     setGlobalCount(count || 0)
   }
 
-  // 检查当前用户状态
+  // 检查用户状态
   const checkUserStatus = async () => {
-    if (!publicKey) return
+    if (!publicKey) {
+      setState('DISCONNECTED')
+      return
+    }
 
-    const wallet = publicKey.toBase58()
+    const walletAddress = publicKey.toBase58()
     const now = new Date()
     const year = now.getUTCFullYear()
     const month = String(now.getUTCMonth() + 1).padStart(2, '0')
@@ -37,7 +47,7 @@ export default function Home() {
     const { data } = await supabase
       .from('daka_logs')
       .select('id')
-      .eq('wallet', wallet)
+      .eq('wallet', walletAddress)
       .eq('daka_date', todayUTC)
       .maybeSingle()
 
@@ -54,11 +64,10 @@ export default function Home() {
     if (result.success) {
       setState('RECORDED_TODAY')
       toast.success("0 before the dot.")
-      refreshStats() // 成功后刷新一下总数
+      refreshStats()
     } else {
       if (result.msg === 'Already daka today') {
         setState('RECORDED_TODAY')
-        toast('Already recorded today.')
       } else {
         setState('CONNECTED')
         toast.error(result.msg)
@@ -66,106 +75,148 @@ export default function Home() {
     }
   }
 
-  // 初始化
+  // 自动刷新数据
   useEffect(() => {
-    refreshStats() // 进来先查总数
-    const timer = setInterval(refreshStats, 30000) // 每30秒自动刷新一次数据
+    refreshStats()
+    const timer = setInterval(refreshStats, 30000)
     return () => clearInterval(timer)
   }, [])
 
+  // 监听钱包状态变化
   useEffect(() => {
+    if (!isMounted) return // 如果还没加载完，什么都不做
+    
     if (connected && publicKey) {
       checkUserStatus()
     } else {
-      setState('DISCONNECTED')
+      // 这里加个小延迟，防止刷新时瞬间闪烁
+      const timer = setTimeout(() => {
+        if (!connected) setState('DISCONNECTED')
+      }, 100) 
+      return () => clearTimeout(timer)
     }
-  }, [connected, publicKey])
+  }, [connected, publicKey, isMounted])
+
+  // 防止水合不匹配，加载前只显示纯黑背景
+  if (!isMounted) return <main className="h-screen bg-black" />
 
   return (
-    <main className="h-screen bg-black flex flex-col items-center justify-center text-white relative overflow-hidden">
+    <main className="h-screen bg-black flex flex-col items-center justify-center text-white relative font-mono">
       <Toaster theme="dark" position="bottom-center" />
 
-      {/* 背景装饰 (极简风格) */}
-      <div className="absolute top-0 left-0 w-full h-1 bg-gradient-to-r from-transparent via-purple-900 to-transparent opacity-30"></div>
-
-      <h1 className="mb-12 text-2xl tracking-[0.2em] font-light text-white/90 font-mono">
+      {/* 标题 */}
+      <h1 className="mb-24 text-2xl tracking-[0.15em] opacity-90 text-[#e0e0e0]">
         0 before the dot
       </h1>
 
-      {/* 核心交互区 */}
-      <div className="z-10 flex flex-col items-center gap-8">
+      {/* 核心交互区域 */}
+      <div className="z-10 flex flex-col items-center justify-center min-h-[100px]">
         
-        {state === 'DISCONNECTED' && (
-          <WalletMultiButton className="!bg-white/5 !rounded-full !border !border-white/10 hover:!bg-white/10 transition-all !font-mono !text-sm" />
+        {/* 状态：加载中 (不显示按钮，或者显示一个占位符，防止跳动) */}
+        {state === 'CHECKING' && (
+           <div className="opacity-0">Loading...</div>
         )}
 
+        {/* 状态：未连接 (还原紫色按钮) */}
+        {state === 'DISCONNECTED' && (
+          <div className="custom-wallet-btn-wrapper">
+             <WalletMultiButton style={{ 
+                 backgroundColor: '#5b21b6', // 紫色
+                 borderRadius: '9999px', 
+                 height: '60px',
+                 padding: '0 40px',
+                 fontSize: '16px',
+                 fontFamily: 'monospace'
+             }}>
+                Link Wallet
+             </WalletMultiButton>
+          </div>
+        )}
+
+        {/* 状态：已连接，可打卡 (还原橙色发光按钮) */}
         {state === 'CONNECTED' && (
           <button
             onClick={handleDaka}
-            className="group relative px-16 py-5 rounded-full bg-transparent border border-[#d2b48c] text-[#d2b48c] hover:bg-[#d2b48c] hover:text-black transition-all duration-500 shadow-[0_0_20px_rgba(210,180,140,0.1)] hover:shadow-[0_0_40px_rgba(210,180,140,0.5)]"
+            className="px-16 py-4 rounded-full bg-[#92400e] text-[#fcd34d] font-bold text-xl tracking-widest shadow-[0_0_30px_rgba(146,64,14,0.6)] hover:bg-[#b45309] hover:shadow-[0_0_50px_rgba(180,83,9,0.8)] transition-all duration-300 transform hover:scale-105"
           >
-            <span className="tracking-[0.15em] font-bold text-lg">DAKA</span>
+            DAKA
           </button>
         )}
 
+        {/* 状态：处理中 */}
         {state === 'LOADING' && (
-           <div className="px-16 py-5 rounded-full border border-white/10 text-white/30 animate-pulse font-mono">
-             VERIFYING...
-           </div>
+           <button disabled className="px-16 py-4 rounded-full bg-neutral-800 text-neutral-500 font-bold text-xl tracking-widest cursor-wait">
+             ...
+           </button>
         )}
 
+        {/* 状态：已完成 (还原灰色按钮) */}
         {state === 'RECORDED_TODAY' && (
-          <div className="flex flex-col items-center gap-2 animate-fade-in">
-              <div className="px-16 py-5 rounded-full bg-white/5 text-white/40 border border-white/5 cursor-not-allowed tracking-widest">
-                RECORDED
+          <div className="flex flex-col items-center gap-4">
+              <button
+                disabled
+                className="px-16 py-4 rounded-full bg-[#262626] text-[#525252] font-bold text-xl tracking-widest cursor-not-allowed border border-[#404040]"
+              >
+                Recorded
+              </button>
+              
+              {/* 计数器放在这里，低调显示 */}
+              <div className="text-[10px] text-neutral-600 tracking-[0.2em] mt-2">
+                {globalCount} / ∞
               </div>
           </div>
         )}
 
-        {/* 真实数据展示 */}
-        <div className="text-center space-y-2 mt-4">
-            <div className="text-4xl font-mono font-thin text-white">{globalCount}</div>
-            <div className="text-[10px] uppercase tracking-widest text-white/30">
-                Wallets Showed Up Today
+      </div>
+
+      {/* 底部信息 */}
+      <div className="absolute bottom-10 flex flex-col items-center gap-4">
+          
+          {/* 只有连接后才显示钱包地址 */}
+          {connected && publicKey && (
+            <div className="text-[10px] text-neutral-700 font-mono tracking-widest flex items-center gap-2">
+                 <span className="w-2 h-2 rounded-full bg-green-900 animate-pulse"></span>
+                 {publicKey.toBase58().slice(0, 4)}...{publicKey.toBase58().slice(-4)}
             </div>
-        </div>
+          )}
 
-      </div>
-
-      {/* 底部 Rules 按钮 */}
-      <div className="absolute bottom-8 flex gap-6 text-xs text-white/30 font-mono uppercase tracking-widest">
-          <button onClick={() => setShowRules(true)} className="hover:text-white transition-colors border-b border-transparent hover:border-white/50 pb-1">
-              Rules
+          {/* 规则入口 */}
+          <button 
+            onClick={() => setShowRules(true)} 
+            className="text-[10px] text-neutral-800 hover:text-neutral-500 transition-colors uppercase tracking-widest"
+          >
+              Protocol Rules
           </button>
-          <a href="https://twitter.com/dakkcoin" target="_blank" className="hover:text-white transition-colors border-b border-transparent hover:border-white/50 pb-1">
-              Twitter
-          </a>
+          
+          <div className="text-[10px] text-neutral-900">
+             © 2025 by Dakk. All rights reserved!
+          </div>
       </div>
 
-      {/* 简单的规则弹窗 */}
+      {/* 规则弹窗 (保持纯黑风格) */}
       {showRules && (
-        <div className="absolute inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm" onClick={() => setShowRules(false)}>
-            <div className="bg-black border border-white/10 p-8 max-w-md w-full mx-4 shadow-2xl relative" onClick={e => e.stopPropagation()}>
-                <h3 className="text-lg font-mono mb-6 tracking-widest text-[#d2b48c]">PROTOCOL RULES</h3>
-                <ul className="space-y-4 text-sm text-white/60 font-mono leading-relaxed">
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/90 backdrop-blur-sm" onClick={() => setShowRules(false)}>
+            <div className="bg-black border border-neutral-800 p-8 max-w-sm w-full mx-6 shadow-2xl" onClick={e => e.stopPropagation()}>
+                <h3 className="text-sm font-mono mb-6 tracking-widest text-neutral-400 border-b border-neutral-900 pb-2">RULES</h3>
+                <ul className="space-y-4 text-xs text-neutral-500 font-mono leading-relaxed">
                     <li className="flex gap-3">
-                        <span className="text-white/20">01.</span>
-                        <span>One daka per wallet, per UTC day.</span>
+                        <span className="text-neutral-700">01</span>
+                        <span>One daka per wallet / UTC day.</span>
                     </li>
                     <li className="flex gap-3">
-                        <span className="text-white/20">02.</span>
-                        <span>No retries. Miss a day, miss it forever.</span>
+                        <span className="text-neutral-700">02</span>
+                        <span>No retries. Miss it, miss it.</span>
                     </li>
                     <li className="flex gap-3">
-                        <span className="text-white/20">03.</span>
-                        <span>Anti-bot: Min 0.01 SOL required.</span>
+                        <span className="text-neutral-700">03</span>
+                        <span>Min 0.01 SOL to prevent spam.</span>
                     </li>
                 </ul>
                 <button 
                     onClick={() => setShowRules(false)}
-                    className="mt-8 w-full py-3 border border-white/10 hover:bg-white/5 text-white/40 text-xs tracking-widest uppercase transition-colors"
+                    className="mt-8 w-full py-3 bg-neutral-900 hover:bg-neutral-800 text-neutral-500 text-[10px] tracking-widest uppercase transition-colors rounded"
                 >
-                    I Understand
+                    Close
                 </button>
             </div>
         </div>
