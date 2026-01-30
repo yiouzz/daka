@@ -4,30 +4,36 @@ import { useWallet } from '@solana/wallet-adapter-react'
 import { WalletMultiButton } from '@solana/wallet-adapter-react-ui'
 import { useEffect, useState } from 'react'
 import { supabase } from '../lib/supabase'
-import { submitDaka } from './actions' 
+import { submitDaka, getGlobalStats } from './actions' 
 import { Toaster, toast } from 'sonner' 
 
-// 定义几种简单的状态
 type State = 'DISCONNECTED' | 'CONNECTED' | 'RECORDED_TODAY' | 'LOADING'
 
 export default function Home() {
   const { publicKey, connected } = useWallet()
   const [state, setState] = useState<State>('DISCONNECTED')
+  
+  // 新增：全局计数 & 规则弹窗开关
+  const [globalCount, setGlobalCount] = useState(0)
+  const [showRules, setShowRules] = useState(false)
 
-  // 检查状态（只负责看，不负责改）
-  const checkStatus = async () => {
+  // 获取最新数据
+  const refreshStats = async () => {
+    const { count } = await getGlobalStats()
+    setGlobalCount(count || 0)
+  }
+
+  // 检查当前用户状态
+  const checkUserStatus = async () => {
     if (!publicKey) return
 
     const wallet = publicKey.toBase58()
-    
-    // 算出 UTC 时间字符串
     const now = new Date()
     const year = now.getUTCFullYear()
     const month = String(now.getUTCMonth() + 1).padStart(2, '0')
     const day = String(now.getUTCDate()).padStart(2, '0')
     const todayUTC = `${year}-${month}-${day}`
 
-    // 问问数据库：这个钱包今天有记录吗？
     const { data } = await supabase
       .from('daka_logs')
       .select('id')
@@ -35,98 +41,133 @@ export default function Home() {
       .eq('daka_date', todayUTC)
       .maybeSingle()
 
-    if (data) {
-      setState('RECORDED_TODAY')
-    } else {
-      setState('CONNECTED')
-    }
+    if (data) setState('RECORDED_TODAY')
+    else setState('CONNECTED')
   }
 
-  // 点击 DAKA 按钮触发
   const handleDaka = async () => {
     if (!publicKey) return
-    
-    // 1. 界面变更为加载中
     setState('LOADING')
 
-    // 2. 呼叫后端裁判 (调用 actions.ts)
     const result = await submitDaka(publicKey.toBase58())
 
-    // 3. 根据裁判结果更新界面
     if (result.success) {
       setState('RECORDED_TODAY')
-      toast.success("0 before the dot.") // 成功弹窗
+      toast.success("0 before the dot.")
+      refreshStats() // 成功后刷新一下总数
     } else {
       if (result.msg === 'Already daka today') {
         setState('RECORDED_TODAY')
         toast('Already recorded today.')
       } else {
-        // 其他错误（比如没钱，或者系统错误）
         setState('CONNECTED')
         toast.error(result.msg)
       }
     }
   }
 
-  // 当钱包连接状态改变时，自动检查
+  // 初始化
+  useEffect(() => {
+    refreshStats() // 进来先查总数
+    const timer = setInterval(refreshStats, 30000) // 每30秒自动刷新一次数据
+    return () => clearInterval(timer)
+  }, [])
+
   useEffect(() => {
     if (connected && publicKey) {
-      checkStatus()
+      checkUserStatus()
     } else {
       setState('DISCONNECTED')
     }
   }, [connected, publicKey])
 
   return (
-    <main className="h-screen bg-black flex flex-col items-center justify-center text-white relative">
-      {/* 弹窗组件放在这里 */}
+    <main className="h-screen bg-black flex flex-col items-center justify-center text-white relative overflow-hidden">
       <Toaster theme="dark" position="bottom-center" />
 
-      <h1 className="mb-16 text-xl tracking-widest opacity-80 font-mono">
+      {/* 背景装饰 (极简风格) */}
+      <div className="absolute top-0 left-0 w-full h-1 bg-gradient-to-r from-transparent via-purple-900 to-transparent opacity-30"></div>
+
+      <h1 className="mb-12 text-2xl tracking-[0.2em] font-light text-white/90 font-mono">
         0 before the dot
       </h1>
 
-      {/* 状态 1: 未连接 */}
-      {state === 'DISCONNECTED' && (
-        <WalletMultiButton className="!bg-purple-900/50 !rounded-full !border !border-purple-500/30 hover:!bg-purple-800 transition-all" />
-      )}
+      {/* 核心交互区 */}
+      <div className="z-10 flex flex-col items-center gap-8">
+        
+        {state === 'DISCONNECTED' && (
+          <WalletMultiButton className="!bg-white/5 !rounded-full !border !border-white/10 hover:!bg-white/10 transition-all !font-mono !text-sm" />
+        )}
 
-      {/* 状态 2: 已连接，可打卡 */}
-      {state === 'CONNECTED' && (
-        <button
-          onClick={handleDaka}
-          className="group relative px-12 py-4 rounded-full bg-transparent border border-[#d2b48c] text-[#d2b48c] hover:bg-[#d2b48c] hover:text-black transition-all duration-300 shadow-[0_0_15px_rgba(210,180,140,0.3)] hover:shadow-[0_0_25px_rgba(210,180,140,0.6)]"
-        >
-          <span className="tracking-widest font-bold">DAKA</span>
-        </button>
-      )}
+        {state === 'CONNECTED' && (
+          <button
+            onClick={handleDaka}
+            className="group relative px-16 py-5 rounded-full bg-transparent border border-[#d2b48c] text-[#d2b48c] hover:bg-[#d2b48c] hover:text-black transition-all duration-500 shadow-[0_0_20px_rgba(210,180,140,0.1)] hover:shadow-[0_0_40px_rgba(210,180,140,0.5)]"
+          >
+            <span className="tracking-[0.15em] font-bold text-lg">DAKA</span>
+          </button>
+        )}
 
-      {/* 状态 3: 处理中 */}
-      {state === 'LOADING' && (
-         <button disabled className="px-12 py-4 rounded-full bg-gray-800 text-gray-400 border border-gray-700 cursor-wait">
-           Processing...
-         </button>
-      )}
+        {state === 'LOADING' && (
+           <div className="px-16 py-5 rounded-full border border-white/10 text-white/30 animate-pulse font-mono">
+             VERIFYING...
+           </div>
+        )}
 
-      {/* 状态 4: 今日已完成 */}
-      {state === 'RECORDED_TODAY' && (
-        <div className="flex flex-col items-center gap-4">
-            <button
-            disabled
-            className="px-12 py-4 rounded-full bg-gray-900 text-gray-500 border border-gray-800 cursor-not-allowed"
-            >
-            Recorded
-            </button>
-            <p className="text-xs text-gray-600 font-mono">See you tomorrow UTC 0</p>
-        </div>
-      )}
-
-      {/* 底部钱包地址展示 */}
-      {connected && publicKey && (
-        <div className="absolute bottom-10 flex flex-col items-center gap-2">
-          <div className="text-xs opacity-30 font-mono">
-             {publicKey.toBase58().slice(0, 4)}...{publicKey.toBase58().slice(-4)}
+        {state === 'RECORDED_TODAY' && (
+          <div className="flex flex-col items-center gap-2 animate-fade-in">
+              <div className="px-16 py-5 rounded-full bg-white/5 text-white/40 border border-white/5 cursor-not-allowed tracking-widest">
+                RECORDED
+              </div>
           </div>
+        )}
+
+        {/* 真实数据展示 */}
+        <div className="text-center space-y-2 mt-4">
+            <div className="text-4xl font-mono font-thin text-white">{globalCount}</div>
+            <div className="text-[10px] uppercase tracking-widest text-white/30">
+                Wallets Showed Up Today
+            </div>
+        </div>
+
+      </div>
+
+      {/* 底部 Rules 按钮 */}
+      <div className="absolute bottom-8 flex gap-6 text-xs text-white/30 font-mono uppercase tracking-widest">
+          <button onClick={() => setShowRules(true)} className="hover:text-white transition-colors border-b border-transparent hover:border-white/50 pb-1">
+              Rules
+          </button>
+          <a href="https://twitter.com/dakkcoin" target="_blank" className="hover:text-white transition-colors border-b border-transparent hover:border-white/50 pb-1">
+              Twitter
+          </a>
+      </div>
+
+      {/* 简单的规则弹窗 */}
+      {showRules && (
+        <div className="absolute inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm" onClick={() => setShowRules(false)}>
+            <div className="bg-black border border-white/10 p-8 max-w-md w-full mx-4 shadow-2xl relative" onClick={e => e.stopPropagation()}>
+                <h3 className="text-lg font-mono mb-6 tracking-widest text-[#d2b48c]">PROTOCOL RULES</h3>
+                <ul className="space-y-4 text-sm text-white/60 font-mono leading-relaxed">
+                    <li className="flex gap-3">
+                        <span className="text-white/20">01.</span>
+                        <span>One daka per wallet, per UTC day.</span>
+                    </li>
+                    <li className="flex gap-3">
+                        <span className="text-white/20">02.</span>
+                        <span>No retries. Miss a day, miss it forever.</span>
+                    </li>
+                    <li className="flex gap-3">
+                        <span className="text-white/20">03.</span>
+                        <span>Anti-bot: Min 0.01 SOL required.</span>
+                    </li>
+                </ul>
+                <button 
+                    onClick={() => setShowRules(false)}
+                    className="mt-8 w-full py-3 border border-white/10 hover:bg-white/5 text-white/40 text-xs tracking-widest uppercase transition-colors"
+                >
+                    I Understand
+                </button>
+            </div>
         </div>
       )}
     </main>
